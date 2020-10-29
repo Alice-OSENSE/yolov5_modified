@@ -107,7 +107,7 @@ class _RepeatSampler(object):
 
 
 class LoadImages:  # for inference
-    def __init__(self, path, img_size=640):
+    def __init__(self, path, rotate, img_size=640):
         p = str(Path(path))  # os-agnostic
         p = os.path.abspath(p)  # absolute path
         if '*' in p:
@@ -245,8 +245,50 @@ class LoadWebcam:  # for inference
         # Convert
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
-
         return img_path, img, img0, None
+
+    def __len__(self):
+        return 0
+
+
+class LoadVideo:  # for inference
+    def __init__(self, video_path, rotate, img_size=640):
+        self.mode = 'video'
+        self.img_size = img_size
+        self.video_path = video_path
+        self.rotate = rotate
+        self.cap = cv2.VideoCapture(video_path)  # video capture object
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # set buffer size
+
+    def __iter__(self):
+        self.count = -1
+        return self
+
+    def __next__(self):
+        self.count += 1
+        if cv2.waitKey(1) == ord('q'):  # q to quit
+            self.cap.release()
+            cv2.destroyAllWindows()
+            raise StopIteration
+
+        n = 0
+        while True:
+            n += 1
+            if n % 30 == 0:  # skip frames
+                ret_val, img0 = self.cap.read()
+                if ret_val:
+                    break
+
+        # Padded resize
+        img = letterbox(img0, new_shape=self.img_size)[0]
+        # Convert
+        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
+        print(img0.shape)
+        img0 = np.rot90(img0, k=self.rotate, axes=(0, 1))
+        print(img0.shape)
+        img = np.rot90(img, k=self.rotate, axes=(0, 1))
+        img = np.ascontiguousarray(img)
+        return self.video_path, img, img0, self.cap
 
     def __len__(self):
         return 0
