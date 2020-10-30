@@ -1,7 +1,8 @@
 python3 ../detect.py \
---weights /home/osense-office/Documents/ext_repo/yolov5/runs/exp21/weights/best.pt \
+--weights /home/osense-office/Documents/ext_repo/yolov5/runs/exp23/weights/best.pt \
 --source_type video \
---source /home/osense-office/Desktop/ffmpeg_211_2020-08-29_11-40-00.mp4 \
+--img-size 3000 \
+--source /home/osense-office/Desktop/ffmpeg_219_2020-10-14_14-50-00.mp4 \
 --output /home/osense-office/Documents/ext_repo/yolov5/results \
 --device 0 \
 --view-img \
@@ -10,4 +11,4 @@ python3 ../detect.py \
 --iou-thres 0.6 \
 --delay 20 \
 --stream_scale 0.4 \
---rotate 2
+--rotate 3

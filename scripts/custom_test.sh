@@ -1,6 +1,6 @@
 python3 ../custom_test.py \
---weights ../runs/exp26/weights/best.pt \
---data ../data/open_images_full.yaml \
+--weights ../runs/exp25/weights/best.pt \
+--data ../data/open_images_filtered_4.yaml \
 --batch-size 1 \
 --conf-thres 0.4 \
 --iou-thres 0.65 \

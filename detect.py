@@ -79,21 +79,17 @@ def detect(save_img=False, write_label=False):
     # _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
     for path, img, im0s, vid_cap in dataset:
-        img = torch.from_numpy(img).to(device)
-        img = img.half() if half else img.float()  # uint8 to fp16/32
-        img /= 255.0  # 0 - 255 to 0.0 - 1.0
-        if img.ndimension() == 3:
-            img = img.unsqueeze(0)
-
-        # im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
-        # img0_rotate = copy.deepcopy(np.ascontiguousarray(img0_rotate))
-
-        # img_rotate = np.rot90(img, k=opt.rotate, axes=(0, 1)).copy()
-        # img_rotate = copy.deepcopy(np.ascontiguousarray(img_rotate))
+        im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
+        img_rotate = np.rot90(img, k=opt.rotate, axes=(1, 2)).copy()
+        img_rotate = torch.from_numpy(img_rotate).to(device)
+        img_rotate = img_rotate.half() if half else img_rotate.float()  # uint8 to fp16/32
+        img_rotate /= 255.0  # 0 - 255 to 0.0 - 1.0
+        if img_rotate.ndimension() == 3:
+            img_rotate = img_rotate.unsqueeze(0)
 
         # Inference
         t1 = time_synchronized()
-        pred = model(img, augment=opt.augment)[0]
+        pred = model(img_rotate, augment=opt.augment)[0]
 
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
@@ -101,31 +97,31 @@ def detect(save_img=False, write_label=False):
 
         # Apply Classifier
         if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
+            pred = apply_classifier(pred, modelc, img_rotate, im0s_rotate)
 
         # Process detections
-        for i, det in enumerate(pred):  # detections per image
+        for i, detection in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
-                p, s, im0 = path[i], '%g: ' % i, im0s[i].copy()
+                p, s, im0 = path[i], '%g: ' % i, im0s_rotate[i].copy()
             else:
-                p, s, im0 = path, '', im0s
+                p, s, im0 = path, '', im0s_rotate
 
             save_path = str(Path(out) / Path(p).name)
 
             txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'image' else '')
-            s += '%gx%g ' % img.shape[2:]  # print string
-            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            if det is not None and len(det):
+            s += '%gx%g ' % img_rotate.shape[2:]  # print string
+            gn = torch.tensor(im0s_rotate.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            if detection is not None and len(detection):
                 # Rescale boxes from img_size to im0 size
-                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
+                detection[:, :4] = scale_coords(img_rotate.shape[2:], detection[:, :4], im0.shape).round()
 
                 # Print results
-                for c in det[:, -1].unique():
-                    n = (det[:, -1] == c).sum()  # detections per class
+                for c in detection[:, -1].unique():
+                    n = (detection[:, -1] == c).sum()  # detections per class
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
                 # Write results
-                for *xyxy, conf, cls in reversed(det):
+                for *xyxy, conf, cls in reversed(detection):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         with open(txt_path + '.txt', 'a') as f:
@@ -140,8 +136,8 @@ def detect(save_img=False, write_label=False):
 
             # Stream results
             if view_img:
-                im0 = cv2.resize(im0, None, fx=opt.stream_scale, fy=opt.stream_scale)
-                cv2.imshow(p, im0)
+                im0_resized = cv2.resize(im0, None, fx=opt.stream_scale, fy=opt.stream_scale)
+                cv2.imshow(p, im0_resized)
                 if dataset.mode == 'video':
                     cv2.waitKey(delay=1)
                 elif cv2.waitKey(1) == ord('q'):  # q to quit
@@ -159,8 +155,14 @@ def detect(save_img=False, write_label=False):
 
                         fourcc = 'mp4v'  # output video codec
                         fps = vid_cap.get(cv2.CAP_PROP_FPS)
+
                         w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                         h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                        if opt.rotate % 2:
+                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        print(w)
                         vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
                     vid_writer.write(im0)
 
@@ -174,7 +176,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--source_type', type=str, default='image', help='the type of source [video | webcam | image]')
-
+    parser.add_argument('--segment', type=str, default='data/segment/segment_trivial', help='Segmentation parameter path; if None, \
+                        then no segmentation will be performed')
     # the path to video, if source_type == video
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
