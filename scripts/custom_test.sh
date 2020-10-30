@@ -1,5 +1,5 @@
 python3 ../custom_test.py \
---weights ../runs/exp24/weights/best.pt \
+--weights ../runs/exp26/weights/best.pt \
 --data ../data/open_images_full.yaml \
 --batch-size 1 \
 --conf-thres 0.4 \

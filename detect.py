@@ -1,5 +1,6 @@
 import argparse
 import os
+import numpy as np
 import shutil
 import time
 from pathlib import Path
@@ -74,14 +75,21 @@ def detect(save_img=False, write_label=False):
 
     # Run inference
     t0 = time.time()
-    img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
-    _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+    # img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
+    # _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
+
     for path, img, im0s, vid_cap in dataset:
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
+
+        # im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
+        # img0_rotate = copy.deepcopy(np.ascontiguousarray(img0_rotate))
+
+        # img_rotate = np.rot90(img, k=opt.rotate, axes=(0, 1)).copy()
+        # img_rotate = copy.deepcopy(np.ascontiguousarray(img_rotate))
 
         # Inference
         t1 = time_synchronized()

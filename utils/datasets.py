@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Thread
 
 import cv2
+import copy
 import math
 import numpy as np
 import torch
@@ -283,11 +284,8 @@ class LoadVideo:  # for inference
         img = letterbox(img0, new_shape=self.img_size)[0]
         # Convert
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
-        print(img0.shape)
-        img0 = np.rot90(img0, k=self.rotate, axes=(0, 1))
-        print(img0.shape)
-        img = np.rot90(img, k=self.rotate, axes=(0, 1))
         img = np.ascontiguousarray(img)
+
         return self.video_path, img, img0, self.cap
 
     def __len__(self):
