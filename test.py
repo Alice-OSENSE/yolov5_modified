@@ -78,7 +78,7 @@ def test(data,
     if not training:
         img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
         _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
-        path = data['utest'] if opt.task == 'utest' else data['val']  # path to val/utest images
+        path = data['test'] if opt.task == 'test' else data['val']  # path to val/test images
         dataloader = create_dataloader(path, imgsz, batch_size, model.stride.max(), opt,
                                        hyp=None, augment=False, cache=False, pad=0.5, rect=True)[0]
 
@@ -249,7 +249,7 @@ def test(data,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='utest.py')
+    parser = argparse.ArgumentParser(prog='test.py')
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--data', type=str, default='data/coco128.yaml', help='*.data path')
     parser.add_argument('--batch-size', type=int, default=32, help='size of each image batch')
@@ -257,7 +257,7 @@ if __name__ == '__main__':
     parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.65, help='IOU threshold for NMS')
     parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
-    parser.add_argument('--task', default='val', help="'val', 'utest', 'study'")
+    parser.add_argument('--task', default='val', help="'val', 'test', 'study'")
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--single-cls', action='store_true', help='treat as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
@@ -268,7 +268,7 @@ if __name__ == '__main__':
     opt.data = check_file(opt.data)  # check file
     print(opt)
 
-    if opt.task in ['val', 'utest']:  # run normally
+    if opt.task in ['val', 'test']:  # run normally
         test(opt.data,
              opt.weights,
              opt.batch_size,

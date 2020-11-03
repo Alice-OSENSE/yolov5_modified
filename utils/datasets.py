@@ -251,6 +251,10 @@ class LoadWebcam:  # for inference
     def __len__(self):
         return 0
 
+    def get_padded_size(self):
+        _, img, _, _ = self.__next__()
+        return img.shape
+
 
 class LoadVideo:  # for inference
     def __init__(self, video_path, rotate, img_size=640):
@@ -283,15 +287,17 @@ class LoadVideo:  # for inference
         # Padded resize
         img = letterbox(img0, new_shape=self.img_size)[0]
         # Convert
-        print(img.shape)
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
-        print(img.shape)
         img = np.ascontiguousarray(img)
 
         return self.video_path, img, img0, self.cap
 
     def __len__(self):
         return 0
+
+    def get_padded_size(self):
+        _, img, _, _ = self.__next__()
+        return img.shape
 
 
 class LoadStreams:  # multiple IP or RTSP cameras
@@ -765,7 +771,7 @@ def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scale
 
     # Scale ratio (new / old)
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:  # only scale down, do not scale up (for better utest mAP)
+    if not scaleup:  # only scale down, do not scale up (for better test mAP)
         r = min(r, 1.0)
 
     # Compute padding

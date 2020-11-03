@@ -9,26 +9,44 @@ import cv2
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
+import pickle
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, LoadVideo
 from utils.general import (
     check_img_size, non_max_suppression, apply_classifier, scale_coords,
     xyxy2xywh, plot_one_box, strip_optimizer, set_logging)
+from utils.density_map import plot_one_density_distribution
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-def convert_rotatecode(rotate):
-    if rotate == 1:
-        return cv2.ROTATE_90_CLOCKWISE
-    if rotate == 2:
-        return cv2.ROTATE_180
-    if rotate == 3:
-        return cv2.ROTATE_90_COUNTERCLOCKWISE
-    return None
+vid_path = None
+vid_writer = None
+
+
+def save_image(img, rotate, save_path=None):
+    img = np.rot90(img, k=rotate)
+    cv2.imwrite(save_path, img)
+
+
+# called if save_path is not vid_path
+def get_new_video_writer(save_path, vid_path=None, vid_writer=None, vid_cap=None):
+    if isinstance(vid_writer, cv2.VideoWriter):
+        vid_writer.release()  # release previous video writer
+
+    fourcc = 'mp4v'  # output video codec
+    fps = vid_cap.get(cv2.CAP_PROP_FPS)
+
+    w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    return cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
+
 
 def detect(save_img=False, write_label=False):
-    out, source_type, source, weights, view_img, save_txt, imgsz = \
-        opt.output, opt.source_type, opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
+    out, source_type, source, weights, view_img,\
+        save_txt, imgsz, save_dmap, save_pickle = \
+        opt.output, opt.source_type, opt.source, opt.weights, opt.view_img, \
+        opt.save_txt, opt.img_size, opt.save_dmap, opt.save_pickle
+
     webcam = None
     if source_type == 'webcam':
         webcam = source.isnumeric() or source.startswith(('rtsp://', 'rtmp://', 'http://')) or source.endswith('.txt')
@@ -55,7 +73,7 @@ def detect(save_img=False, write_label=False):
         modelc.to(device).eval()
 
     # Set Dataloader
-    vid_path, vid_writer = None, None
+    vid_path, vid_writer, dmap_vid_writer = None, None, None
     if webcam:
         view_img = True
         cudnn.benchmark = True  # set True to speed up constant image size inference
@@ -78,7 +96,17 @@ def detect(save_img=False, write_label=False):
     # img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
     # _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
+    if save_pickle:
+        print('save pickle')
+        pickle_dict = {}
+
+    frame_count = 0
+
     for path, img, im0s, vid_cap in dataset:
+        frame_count += 1
+        if frame_count == 10:
+            break
+
         im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
         img_rotate = np.rot90(img, k=opt.rotate, axes=(1, 2)).copy()
         img_rotate = torch.from_numpy(img_rotate).to(device)
@@ -86,6 +114,18 @@ def detect(save_img=False, write_label=False):
         img_rotate /= 255.0  # 0 - 255 to 0.0 - 1.0
         if img_rotate.ndimension() == 3:
             img_rotate = img_rotate.unsqueeze(0)
+
+        if save_dmap:
+            dmap = np.zeros([im0s_rotate.shape[0], im0s_rotate.shape[1], 1])
+            x_axis = np.linspace(0, im0s_rotate.shape[0], im0s_rotate.shape[0])
+            y_axis = np.linspace(0, im0s_rotate.shape[1], im0s_rotate.shape[1])
+            x, y = np.meshgrid(x_axis, y_axis)
+
+            # Pack x and y into a single 3-dimensional array
+            pos = np.empty(x.shape + (2,))
+            pos[:, :, 0] = x
+            pos[:, :, 1] = y
+            dmap_vid_path, dmap_vid_writer = None, None
 
         # Inference
         t1 = time_synchronized()
@@ -99,6 +139,12 @@ def detect(save_img=False, write_label=False):
         if classify:
             pred = apply_classifier(pred, modelc, img_rotate, im0s_rotate)
 
+        # save frame
+        index = str(frame_count)
+        frame_path = str(Path(out) / f'frame{index}_thres{opt.conf_thres}.jpg')
+        cv2.imwrite(frame_path, im0s)
+        pickle_dict[frame_count] = []
+
         # Process detections
         for i, detection in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
@@ -106,6 +152,10 @@ def detect(save_img=False, write_label=False):
             else:
                 p, s, im0 = path, '', im0s_rotate
 
+            # variables for density map
+            dmap_file_name = f'dmap_{Path(p).name}'
+            dmap_save_path = str(Path(out) / dmap_file_name)  # change the name
+            dmap_vid_path = None
             save_path = str(Path(out) / Path(p).name)
 
             txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'image' else '')
@@ -127,9 +177,19 @@ def detect(save_img=False, write_label=False):
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
+                    if save_pickle:
+                        xywhc = xyxy2xywh(torch.tensor(xyxy).view(1, 4)).view(-1).tolist()
+                        xywhc.append(conf.data.cpu().item())
+                        # print(xywhc)
+                        pickle_dict[frame_count].append(xywhc)
+
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)], line_thickness=1)
+
+                    if save_dmap:
+                        xywh = xyxy2xywh(torch.tensor(xyxy).view(1, 4))
+                        plot_one_density_distribution(xywh, pos, dmap)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
@@ -137,6 +197,8 @@ def detect(save_img=False, write_label=False):
             # Stream results
             if view_img:
                 im0_resized = cv2.resize(im0, None, fx=opt.stream_scale, fy=opt.stream_scale)
+                # We rotate the image back
+                # im0_resized = np.rot90(im0_resized, k=-opt.rotate)
                 cv2.imshow(p, im0_resized)
                 if dataset.mode == 'video':
                     cv2.waitKey(delay=1)
@@ -145,29 +207,32 @@ def detect(save_img=False, write_label=False):
 
             # Save results (image with detections)
             if save_img:
+                im0 = np.rot90(im0, k=-opt.rotate)
                 if dataset.mode == 'images':
                     cv2.imwrite(save_path, im0)
                 else:
-                    if vid_path != save_path:  # new video
+                    if vid_path != save_path:
                         vid_path = save_path
-                        if isinstance(vid_writer, cv2.VideoWriter):
-                            vid_writer.release()  # release previous video writer
-
-                        fourcc = 'mp4v'  # output video codec
-                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
-
-                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-                        if opt.rotate % 2:
-                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        print(w)
-                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
+                        vid_writer = get_new_video_writer(save_path, vid_path, vid_writer, vid_cap) # new video
                     vid_writer.write(im0)
 
+            # TODO: save density map
+            if save_dmap:
+                dmap = np.rot90(dmap, k=-opt.rotate)
+                if dataset.mode == 'images':
+                    cv2.imwrite(dmap_save_path, dmap)
+                else:
+                    if dmap_vid_path != dmap_save_path:
+                        dmap_vid_writer = get_new_video_writer(dmap_save_path, vid_path, vid_writer, vid_cap)  # new video
+                    dmap_vid_writer.write(im0)
+
+        print(pickle_dict[frame_count])
+
     if save_txt or save_img:
-        print('sults saved to %s' % Path(out))
+        print('results saved to %s' % Path(out))
+    if save_pickle:
+        with open(Path(out) / f"thres{opt.conf_thres}.pickle", 'wb') as handle:
+            pickle.dump(pickle_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     print('Done. (%.3fs)' % (time.time() - t0))
 
@@ -195,6 +260,8 @@ if __name__ == '__main__':
     parser.add_argument('--delay', type=int, default=1, help='The delay when displaying usinOpenCV')
     parser.add_argument('--stream_scale', type=float, default=1.0, help='the width of the shown image or video')
     parser.add_argument('--rotate', type=int, default=0, help='rotate the frame counter clock wise n*90 degrees')
+    parser.add_argument('--save_dmap', action='store_true', help='Whether to save the density map')
+    parser.add_argument('--save_pickle', action='store_true', help='Whether to save the detection result to a picke file')
     opt = parser.parse_args()
     print(opt)
 
