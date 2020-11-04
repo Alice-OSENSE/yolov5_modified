@@ -1,11 +1,10 @@
 python3 ../detect.py \
 --weights /home/osense-office/Documents/ext_repo/yolov5/runs/exp23/weights/best.pt \
---source_type video \
---img-size 3500 \
---source /home/osense-office/Desktop/camera/ffmpeg_214_2020-10-15_15-20-00.mp4 \
---output /home/osense-office/Desktop/thres25/ \
+--source_type images \
+--img-size 3000 \
+--source /media/osense-office/Transcend/1104/ffmpeg_212_2020-10-15_15-00-00/ \
+--output /media/osense-office/Transcend/1104/ffmpeg_212_2020-10-15_15-00-00_result_conf_thres_25/ \
 --device 0 \
---view-img \
 --classes 0 \
 --conf-thres 0.25 \
 --iou-thres 0.4 \

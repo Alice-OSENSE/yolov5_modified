@@ -17,7 +17,7 @@ def plot_one_density_distribution(x, pos, dmap=None):
     foreground_mask
     dmap (density map)
     """
-    mean = np.array([int(x[0][0] + x[0][2] / 2), int(x[0][1] + x[0][3] / 2)])
+    mean = np.array([int(x[0][0]), int(x[0][1])])
     # Should depend not only on the bbox but also the shape of the foreground_mask
     cov = np.array([[x[0][2] / 6, 0.01],
                     [0.01,     x[0][3] / 6]])
@@ -26,4 +26,4 @@ def plot_one_density_distribution(x, pos, dmap=None):
     if dmap is not None:
         return np.add(dmap, new_gaussian)
 
-    # return new_gaussian
+    return new_gaussian

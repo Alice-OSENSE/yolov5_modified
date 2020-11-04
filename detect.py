@@ -15,7 +15,7 @@ from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages, LoadVideo
 from utils.general import (
     check_img_size, non_max_suppression, apply_classifier, scale_coords,
-    xyxy2xywh, plot_one_box, strip_optimizer, set_logging)
+    xyxy2xywh, plot_one_box, strip_optimizer, set_logging, rotate_bbox)
 from utils.density_map import plot_one_density_distribution
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
@@ -78,7 +78,7 @@ def detect(save_img=False, write_label=False):
         view_img = True
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz)
-    elif source_type == 'image':
+    elif source_type == 'images':
         save_img = True
         dataset = LoadImages(source, img_size=imgsz, rotate=opt.rotate)
     else:
@@ -93,8 +93,6 @@ def detect(save_img=False, write_label=False):
 
     # Run inference
     t0 = time.time()
-    # img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
-    # _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
 
     if save_pickle:
         print('save pickle')
@@ -104,14 +102,18 @@ def detect(save_img=False, write_label=False):
 
     for path, img, im0s, vid_cap in dataset:
         frame_count += 1
-        if frame_count == 10:
+
+        """
+        if frame_count == 1000:
             break
+        """
 
         im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
         img_rotate = np.rot90(img, k=opt.rotate, axes=(1, 2)).copy()
         img_rotate = torch.from_numpy(img_rotate).to(device)
         img_rotate = img_rotate.half() if half else img_rotate.float()  # uint8 to fp16/32
         img_rotate /= 255.0  # 0 - 255 to 0.0 - 1.0
+
         if img_rotate.ndimension() == 3:
             img_rotate = img_rotate.unsqueeze(0)
 
@@ -139,18 +141,22 @@ def detect(save_img=False, write_label=False):
         if classify:
             pred = apply_classifier(pred, modelc, img_rotate, im0s_rotate)
 
-        # save frame
-        index = str(frame_count)
-        frame_path = str(Path(out) / f'frame{index}_thres{opt.conf_thres}.jpg')
-        cv2.imwrite(frame_path, im0s)
-        pickle_dict[frame_count] = []
+        image_file_name = Path(path).name
+        if save_pickle:
+            pickle_dict[image_file_name] = []
+
+            # save the corresponding frame
+            # frame_path = str(Path(out) / f'frame{str(frame_count)}_thres{opt.conf_thres}.jpg')
+            # cv2.imwrite(frame_path, im0s)
 
         # Process detections
         for i, detection in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
-                p, s, im0 = path[i], '%g: ' % i, im0s_rotate[i].copy()
+                p, s, im0 = path[i], '%g: ' % i, im0s_rotate[i]
+                orig_im0 = np.rot90(im0s_rotate[i], k=-opt.rotate, axes=(0, 1)).copy()
             else:
                 p, s, im0 = path, '', im0s_rotate
+                orig_im0 = np.rot90(im0s_rotate, k=-opt.rotate, axes=(0, 1)).copy()
 
             # variables for density map
             dmap_file_name = f'dmap_{Path(p).name}'
@@ -176,16 +182,34 @@ def detect(save_img=False, write_label=False):
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
-
-                    if save_pickle:
+                    """
+                                        if save_pickle:
                         xywhc = xyxy2xywh(torch.tensor(xyxy).view(1, 4)).view(-1).tolist()
                         xywhc.append(conf.data.cpu().item())
                         # print(xywhc)
                         pickle_dict[frame_count].append(xywhc)
+                    """
 
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
-                        plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)], line_thickness=1)
+                        orig_xyxy = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0)
+                        if save_pickle:
+                            xywhc = orig_xyxy.numpy().tolist()
+                            xywhc.append(conf.data.cpu().item())
+                            pickle_dict[image_file_name].append(xywhc)
+                            print(image_file_name)
+
+                        plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)],
+                                     line_thickness=1)
+                        plot_one_box(orig_xyxy, orig_im0, label=label, write_label=write_label, color=colors[int(cls)],
+                                     line_thickness=1)
+                        """
+                        label = '%s %.2f' % (names[int(cls)], conf)
+                        orig_im0 = np.rot90(im0, k=-opt.rotate, axes=(0, 1)).copy()
+                        orig_xyxy = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0).numpy()
+                        print(orig_xyxy)
+                        plot_one_box(orig_xyxy, orig_im0, label=label, write_label=write_label, color=colors[int(cls)], line_thickness=1)
+                        """
 
                     if save_dmap:
                         xywh = xyxy2xywh(torch.tensor(xyxy).view(1, 4))
@@ -207,9 +231,8 @@ def detect(save_img=False, write_label=False):
 
             # Save results (image with detections)
             if save_img:
-                im0 = np.rot90(im0, k=-opt.rotate)
                 if dataset.mode == 'images':
-                    cv2.imwrite(save_path, im0)
+                    cv2.imwrite(save_path, orig_im0)
                 else:
                     if vid_path != save_path:
                         vid_path = save_path
@@ -226,13 +249,12 @@ def detect(save_img=False, write_label=False):
                         dmap_vid_writer = get_new_video_writer(dmap_save_path, vid_path, vid_writer, vid_cap)  # new video
                     dmap_vid_writer.write(im0)
 
-        print(pickle_dict[frame_count])
 
     if save_txt or save_img:
         print('results saved to %s' % Path(out))
     if save_pickle:
         with open(Path(out) / f"thres{opt.conf_thres}.pickle", 'wb') as handle:
-            pickle.dump(pickle_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(pickle_dict, handle)
 
     print('Done. (%.3fs)' % (time.time() - t0))
 
@@ -262,6 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('--rotate', type=int, default=0, help='rotate the frame counter clock wise n*90 degrees')
     parser.add_argument('--save_dmap', action='store_true', help='Whether to save the density map')
     parser.add_argument('--save_pickle', action='store_true', help='Whether to save the detection result to a picke file')
+    parser.add_argument('--save_frame')
     opt = parser.parse_args()
     print(opt)
 

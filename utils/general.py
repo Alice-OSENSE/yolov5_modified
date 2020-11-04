@@ -991,6 +991,7 @@ def plot_one_box(x, img, color=None, write_label=True, label=None, line_thicknes
     color = [random.randint(0, 255) for _ in range(3)]
     c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
     cv2.rectangle(img, c1, c2, (0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
+
     if label and write_label:
         tf = max(tl - 1, 1)  # font thickness
         t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
@@ -1297,17 +1298,34 @@ def plot_results(start=0, stop=0, bucket='', id=(), labels=(), save_dir=''):
     fig.savefig(Path(save_dir) / 'results.png', dpi=200)
 
 
-def rotate_bbox(original_img_wh, xywh, k=0):
+def rotate_bbox(rotated_img_wh, xyxy, k=0):
     """
     original_img_wh
-    xywh (an array of four float numbers)
+    xyxy (an array of four float numbers)
     theta (floating point) : Angle of the counter clockwise rotation
     """
-    x, y, w, h = xywh
-    img_w, img_h = original_img_wh
-    return {
+    # print("xyxy here")
+    # print(xyxy)
+    xywh = xyxy2xywh(xyxy)[0]
+    # Need to input normalized xyxy...??
+    # print("xywh here")
+    print(xywh)
+    img_w, img_h, _ = rotated_img_wh
+    print("image dimesion")
+    print(img_w)
+    print(img_h)
+    new_xywh = {
         0: xywh,
-        1: [img_h - (y + h), x, h, w],
-        2: [img_w - (x + w), img_h - (y + h), w, h],
-        3: [y, img_w - (x + w), h, w],
-    }[k % 4]
+        1: [xywh[1], img_w - xywh[0], xywh[3], xywh[2]],
+        2: [img_w - xywh[0], img_h - xywh[1], xywh[2], xywh[3]],
+        3: [img_h - xywh[1], xywh[0], xywh[3], xywh[2]]
+    }
+    new_xywh2 = {
+        0: xywh,
+        1: [xywh[1], img_h - xywh[0], xywh[3], xywh[2]],
+        2: [img_h - xywh[0], img_w - xywh[1], xywh[2], xywh[3]],
+        3: [img_w - xywh[1], xywh[0], xywh[3], xywh[2]]
+    }
+    print("new")
+    print(new_xywh[k % 4])
+    return xywh2xyxy(torch.tensor(new_xywh2[k % 4]).view(1, 4))
