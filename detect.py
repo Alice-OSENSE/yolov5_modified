@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import cv2
+import matplotlib.pyplot as plt
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
@@ -16,7 +17,10 @@ from utils.datasets import LoadStreams, LoadImages, LoadVideo
 from utils.general import (
     check_img_size, non_max_suppression, apply_classifier, scale_coords,
     xyxy2xywh, plot_one_box, strip_optimizer, set_logging, rotate_bbox)
-from utils.density_map import plot_one_density_distribution
+from utils.density_map_utils import (
+    plot_one_density_distribution, setup_density_map
+)
+from utils.stream_utils import stream_result
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 vid_path = None
@@ -27,9 +31,8 @@ def save_image(img, rotate, save_path=None):
     img = np.rot90(img, k=rotate)
     cv2.imwrite(save_path, img)
 
-
 # called if save_path is not vid_path
-def get_new_video_writer(save_path, vid_path=None, vid_writer=None, vid_cap=None):
+def get_new_video_writer(save_path, vid_writer=None, vid_cap=None):
     if isinstance(vid_writer, cv2.VideoWriter):
         vid_writer.release()  # release previous video writer
 
@@ -41,11 +44,18 @@ def get_new_video_writer(save_path, vid_path=None, vid_writer=None, vid_cap=None
     return cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
 
 
-def detect(save_img=False, write_label=False):
-    out, source_type, source, weights, view_img,\
-        save_txt, imgsz, save_dmap, save_pickle = \
-        opt.output, opt.source_type, opt.source, opt.weights, opt.view_img, \
-        opt.save_txt, opt.img_size, opt.save_dmap, opt.save_pickle
+def detect(write_label=False):
+    # basic options
+    out, source_type, source, weights, imgsz = \
+        opt.output, opt.source_type, opt.source, opt.weights, opt.img_size,
+
+    # options to stream results
+    view_bbox, view_dmap = \
+        opt.view_bbox, opt.view_dmap
+
+    # options to save results
+    save_txt, save_bbox, save_dmap, save_pickle, save_frame = \
+        opt.save_txt, opt.save_bbox, opt.save_dmap, opt.save_pickle, opt.save_frame
 
     webcam = None
     if source_type == 'webcam':
@@ -75,14 +85,12 @@ def detect(save_img=False, write_label=False):
     # Set Dataloader
     vid_path, vid_writer, dmap_vid_writer = None, None, None
     if webcam:
-        view_img = True
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz)
     elif source_type == 'images':
         save_img = True
         dataset = LoadImages(source, img_size=imgsz, rotate=opt.rotate)
     else:
-        view_img = True
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadVideo(source, img_size=imgsz, rotate=opt.rotate)
         vid_path = opt.source
@@ -117,16 +125,8 @@ def detect(save_img=False, write_label=False):
         if img_rotate.ndimension() == 3:
             img_rotate = img_rotate.unsqueeze(0)
 
-        if save_dmap:
-            dmap = np.zeros([im0s_rotate.shape[0], im0s_rotate.shape[1], 1])
-            x_axis = np.linspace(0, im0s_rotate.shape[0], im0s_rotate.shape[0])
-            y_axis = np.linspace(0, im0s_rotate.shape[1], im0s_rotate.shape[1])
-            x, y = np.meshgrid(x_axis, y_axis)
-
-            # Pack x and y into a single 3-dimensional array
-            pos = np.empty(x.shape + (2,))
-            pos[:, :, 0] = x
-            pos[:, :, 1] = y
+        if save_dmap or view_dmap:
+            dmap_rotate, pos_rotate = setup_density_map(im0s_rotate)
             dmap_vid_path, dmap_vid_writer = None, None
 
         # Inference
@@ -141,13 +141,13 @@ def detect(save_img=False, write_label=False):
         if classify:
             pred = apply_classifier(pred, modelc, img_rotate, im0s_rotate)
 
-        image_file_name = Path(path).name
+        file_name = Path(path).name
         if save_pickle:
-            pickle_dict[image_file_name] = []
+            pickle_dict[file_name] = []
 
-            # save the corresponding frame
-            # frame_path = str(Path(out) / f'frame{str(frame_count)}_thres{opt.conf_thres}.jpg')
-            # cv2.imwrite(frame_path, im0s)
+        if save_frame:  # save raw frame
+            frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
+            cv2.imwrite(frame_path, im0s)
 
         # Process detections
         for i, detection in enumerate(pred):  # detections per image
@@ -178,80 +178,65 @@ def detect(save_img=False, write_label=False):
 
                 # Write results
                 for *xyxy, conf, cls in reversed(detection):
+                    xyxy_unrotate = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0)
+                    xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
+
                     if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        xywh = (xywh_unrotate / gn).view(-1).tolist()  # normalized xywh
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
-                    """
-                                        if save_pickle:
-                        xywhc = xyxy2xywh(torch.tensor(xyxy).view(1, 4)).view(-1).tolist()
+
+                    if save_pickle:
+                        xywhc = xywh_unrotate.numpy().tolist() #TODO: there are still negative x!?? what the heck
                         xywhc.append(conf.data.cpu().item())
-                        # print(xywhc)
-                        pickle_dict[frame_count].append(xywhc)
-                    """
+                        pickle_dict[file_name].append(xywhc)
 
-                    if save_img or view_img:  # Add bbox to image
+                    if save_bbox or view_bbox:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
-                        orig_xyxy = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0)
-                        if save_pickle:
-                            xywhc = orig_xyxy.numpy().tolist()
-                            xywhc.append(conf.data.cpu().item())
-                            pickle_dict[image_file_name].append(xywhc)
-                            print(image_file_name)
-
                         plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)],
                                      line_thickness=1)
-                        plot_one_box(orig_xyxy, orig_im0, label=label, write_label=write_label, color=colors[int(cls)],
+                        plot_one_box(xyxy_unrotate, orig_im0, label=label, write_label=write_label, color=colors[int(cls)],
                                      line_thickness=1)
-                        """
-                        label = '%s %.2f' % (names[int(cls)], conf)
-                        orig_im0 = np.rot90(im0, k=-opt.rotate, axes=(0, 1)).copy()
-                        orig_xyxy = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0).numpy()
-                        print(orig_xyxy)
-                        plot_one_box(orig_xyxy, orig_im0, label=label, write_label=write_label, color=colors[int(cls)], line_thickness=1)
-                        """
 
-                    if save_dmap:
-                        xywh = xyxy2xywh(torch.tensor(xyxy).view(1, 4))
-                        plot_one_density_distribution(xywh, pos, dmap)
+                    if save_dmap or view_dmap:
+                        dmap_rotate = plot_one_density_distribution(xyxy, pos_rotate, dmap_rotate)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
 
             # Stream results
-            if view_img:
-                im0_resized = cv2.resize(im0, None, fx=opt.stream_scale, fy=opt.stream_scale)
-                # We rotate the image back
-                # im0_resized = np.rot90(im0_resized, k=-opt.rotate)
-                cv2.imshow(p, im0_resized)
-                if dataset.mode == 'video':
-                    cv2.waitKey(delay=1)
-                elif cv2.waitKey(1) == ord('q'):  # q to quit
-                    raise StopIteration
+            if view_bbox or view_dmap:
+                if view_dmap:
+                    dmap_rotate *= 255 * 40
+                    dmap_rotate[dmap_rotate > 255] = 255
+                    # plt.imshow(dmap_rotate)
+                    # plt.show()
+                    im0[:, :, 2] = dmap_rotate[:, :, 0]
+                stream_result(im0, scale=opt.stream_scale, mode=dataset.mode, window_name=p)
 
-            # Save results (image with detections)
-            if save_img:
+            # Save results (image with detections). We always rotate the image back to its original orientation
+            if save_bbox or save_dmap:
                 if dataset.mode == 'images':
                     cv2.imwrite(save_path, orig_im0)
                 else:
                     if vid_path != save_path:
                         vid_path = save_path
-                        vid_writer = get_new_video_writer(save_path, vid_path, vid_writer, vid_cap) # new video
+                        vid_writer = get_new_video_writer(save_path, vid_writer, vid_cap) # new video
                     vid_writer.write(im0)
 
-            # TODO: save density map
             if save_dmap:
-                dmap = np.rot90(dmap, k=-opt.rotate)
+                dmap_rotate = np.rot90(dmap_rotate, k=-opt.rotate)
                 if dataset.mode == 'images':
-                    cv2.imwrite(dmap_save_path, dmap)
+                    cv2.imwrite(dmap_save_path, dmap_rotate)
                 else:
                     if dmap_vid_path != dmap_save_path:
-                        dmap_vid_writer = get_new_video_writer(dmap_save_path, vid_path, vid_writer, vid_cap)  # new video
-                    dmap_vid_writer.write(im0)
+                        dmap_vid_writer = get_new_video_writer(dmap_save_path, dmap_vid_writer, vid_cap)  # new video
+                    dmap_vid_writer.write(dmap_rotate)
 
 
     if save_txt or save_img:
         print('results saved to %s' % Path(out))
+
     if save_pickle:
         with open(Path(out) / f"thres{opt.conf_thres}.pickle", 'wb') as handle:
             pickle.dump(pickle_dict, handle)
@@ -263,28 +248,40 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     parser.add_argument('--source_type', type=str, default='image', help='the type of source [video | webcam | image]')
-    parser.add_argument('--segment', type=str, default='data/segment/segment_trivial', help='Segmentation parameter path; if None, \
-                        then no segmentation will be performed')
-    # the path to video, if source_type == video
+
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
+
+    parser.add_argument('--segment', type=str, default='data/segment/segment_trivial', help='Segmentation parameter path; if None, \
+                            then no segmentation will be performed')
     parser.add_argument('--img-size', type=int, default=1280, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--view-img', action='store_true', help='display results')
+
+    # options to stream the results
+    parser.add_argument('--view-bbox', action='store_true', help='display detection results with drawn bounding box')
+    parser.add_argument('--view-dmap', action='store_true', help='display detection results with density map')
+    parser.add_argument('--stream_scale', type=float, default=1.0, help='the width of the shown image or video')
+    parser.add_argument('--delay', type=int, default=1, help='The delay when displaying using OpenCV')
+
+    #
+    parser.add_argument('--rotate', type=int, default=0, help='rotate the frame counter clock wise n*90 degrees')
     parser.add_argument('--with-label', action='store_true', help='Set to false to hide the labels in the result image')
-    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--update', action='store_true', help='update all models')
-    parser.add_argument('--delay', type=int, default=1, help='The delay when displaying usinOpenCV')
-    parser.add_argument('--stream_scale', type=float, default=1.0, help='the width of the shown image or video')
-    parser.add_argument('--rotate', type=int, default=0, help='rotate the frame counter clock wise n*90 degrees')
-    parser.add_argument('--save_dmap', action='store_true', help='Whether to save the density map')
-    parser.add_argument('--save_pickle', action='store_true', help='Whether to save the detection result to a picke file')
-    parser.add_argument('--save_frame')
+
+    # options regarding writing the result to disk
+    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
+    parser.add_argument('--save-bbox', action='store_true', help='save original image with bbox drawn in red')
+    parser.add_argument('--save-dmap', action='store_true', help='Whether to save the density map')
+    parser.add_argument('--save-pickle', action='store_true', help='Whether to save the detection result to a pickle file')
+    parser.add_argument('--save-frame', action='store_true', help='Save frame as .jpg file in video or webcam mode')
+    parser.add_argument('--save-rotate', action='store_true', help='Change the orientation of the saved image')
+    parser.add_argument('--max-frame', action='store_true', help='Maximum number of frames to process in video or webcam mode')
+
     opt = parser.parse_args()
     print(opt)
 
@@ -294,4 +291,4 @@ if __name__ == '__main__':
                 detect()
                 strip_optimizer(opt.weights)
         else:
-            detect(save_img=True, write_label=opt.with_label)
+            detect(write_label=opt.with_label)

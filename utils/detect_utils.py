@@ -10,4 +10,4 @@ def prepare_for_density_map(img):
     pos = np.empty(x.shape + (2,))
     pos[:, :, 0] = x
     pos[:, :, 1] = y
-    return dmap, pos, None, None
+    return dmap, pos

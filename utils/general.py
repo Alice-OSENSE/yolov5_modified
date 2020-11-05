@@ -1307,13 +1307,10 @@ def rotate_bbox(rotated_img_wh, xyxy, k=0):
     # print("xyxy here")
     # print(xyxy)
     xywh = xyxy2xywh(xyxy)[0]
-    # Need to input normalized xyxy...??
     # print("xywh here")
     print(xywh)
     img_w, img_h, _ = rotated_img_wh
-    print("image dimesion")
-    print(img_w)
-    print(img_h)
+
     new_xywh = {
         0: xywh,
         1: [xywh[1], img_w - xywh[0], xywh[3], xywh[2]],
@@ -1326,6 +1323,4 @@ def rotate_bbox(rotated_img_wh, xyxy, k=0):
         2: [img_h - xywh[0], img_w - xywh[1], xywh[2], xywh[3]],
         3: [img_w - xywh[1], xywh[0], xywh[3], xywh[2]]
     }
-    print("new")
-    print(new_xywh[k % 4])
     return xywh2xyxy(torch.tensor(new_xywh2[k % 4]).view(1, 4))
