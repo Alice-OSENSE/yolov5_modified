@@ -1,8 +1,6 @@
 import cv2
 import numpy as np
-from skimage import exposure
 from skimage.transform import match_histograms
-
 
 
 def get_foreground_mask(img, background, dilation_kernel, threshold=20):
