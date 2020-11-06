@@ -20,29 +20,13 @@ from utils.general import (
 from utils.density_map_utils import (
     plot_one_density_distribution, setup_density_map
 )
+from utils.output_utils import get_new_video_writer
 from utils.stream_utils import stream_result
 from utils.preprocess_utils import get_foreground_mask
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 vid_path = None
 vid_writer = None
-
-
-def save_image(img, rotate, save_path=None):
-    img = np.rot90(img, k=rotate)
-    cv2.imwrite(save_path, img)
-
-# called if save_path is not vid_path
-def get_new_video_writer(save_path, vid_writer=None, vid_cap=None):
-    if isinstance(vid_writer, cv2.VideoWriter):
-        vid_writer.release()  # release previous video writer
-
-    fourcc = 'mp4v'  # output video codec
-    fps = vid_cap.get(cv2.CAP_PROP_FPS)
-
-    w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    return cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
 
 
 def detect(write_label=False):

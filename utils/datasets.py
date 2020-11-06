@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from threading import Thread
 
+from abc import ABC, abstractmethod
 import cv2
 import copy
 import math
@@ -16,6 +17,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from utils.general import xyxy2xywh, xywh2xyxy, torch_distributed_zero_first
+from utils.partition_utils import Segmenter
 
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng']
@@ -106,9 +108,18 @@ class _RepeatSampler(object):
         while True:
             yield from iter(self.sampler)
 
+class LoadDataset(ABC):
+    def __init__(self, config_path=None):
+        self.segmenter = Segmenter(config_path=config_path) if config_path else None
 
-class LoadImages:  # for inference
-    def __init__(self, path, rotate, img_size=640):
+    @abstractmethod
+    def __next__(self):
+        pass
+
+
+class LoadImages(LoadDataset):  # for inference
+    def __init__(self, path, config_path=None, img_size=640):
+        super(LoadImages, self).__init__(config_path=config_path)
         p = str(Path(path))  # os-agnostic
         p = os.path.abspath(p)  # absolute path
         if '*' in p:
@@ -188,15 +199,13 @@ class LoadImages:  # for inference
         return self.nf  # number of files
 
 
-class LoadWebcam:  # for inference
-    def __init__(self, pipe=0, img_size=640):
+class LoadWebcam(LoadDataset):  # for inference
+    def __init__(self, segment_config, pipe=0, img_size=640):
+        super(LoadWebcam, self).__init__(segment_config)
         self.img_size = img_size
 
         if pipe == '0':
             pipe = 0  # local camera
-        # pipe = 'rtsp://192.168.1.64/1'  # IP camera
-        # pipe = 'rtsp://username:password@192.168.1.64/1'  # IP camera with login
-        # pipe = 'rtsp://170.93.143.139/rtplive/470011e600ef003a004ee33696235daa'  # IP traffic camera
         # pipe = 'http://wmccpinetop.axiscam.net/mjpg/video.mjpg'  # IP golf camera
 
         # https://answers.opencv.org/question/215996/changing-gstreamer-pipeline-to-opencv-in-pythonsolved/
@@ -256,12 +265,12 @@ class LoadWebcam:  # for inference
         return img.shape
 
 
-class LoadVideo:  # for inference
-    def __init__(self, video_path, rotate, img_size=640):
+class LoadVideo(LoadDataset):  # for inference
+    def __init__(self, video_path, seg_config_path, img_size=640):
+        super(LoadVideo, self).__init__(seg_config_path)
         self.mode = 'video'
         self.img_size = img_size
         self.video_path = video_path
-        self.rotate = rotate
         self.cap = cv2.VideoCapture(video_path)  # video capture object
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # set buffer size
 
@@ -284,13 +293,15 @@ class LoadVideo:  # for inference
                 if ret_val:
                     break
 
-        # Padded resize
-        img = letterbox(img0, new_shape=self.img_size)[0]
-        # Convert
-        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
-        img = np.ascontiguousarray(img)
+        if self.segmenter is not None:
+            imgs = self.segmenter(img0)
 
-        return self.video_path, img, img0, self.cap
+        imgs = [letterbox(img, new_shape=self.img_size)[0] for img in imgs]
+        # Convert .transpose(2, 0, 1)
+        imgs = [img[:, :, ::-1] for img in imgs]  # BGR to RGB, to 3x416x416
+        imgs = [np.ascontiguousarray(img) for img in imgs]
+
+        return self.video_path, imgs, img0, self.cap
 
     def __len__(self):
         return 0
@@ -300,8 +311,9 @@ class LoadVideo:  # for inference
         return img.shape
 
 
-class LoadStreams:  # multiple IP or RTSP cameras
-    def __init__(self, sources='streams.txt', img_size=640):
+class LoadStreams(LoadDataset):  # multiple IP or RTSP cameras
+    def __init__(self, seg_config_path, sources='streams.txt', img_size=640):
+        super(LoadDataset, self).__init__(seg_config_path)
         self.mode = 'images'
         self.img_size = img_size
 
@@ -503,7 +515,6 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                         assert cv2.imwrite(f, img[b[1]:b[3], b[0]:b[2]]), 'Failure extracting classifier boxes'
             else:
                 ne += 1  # print('empty labels for image %s' % self.img_files[i])  # file empty
-                # os.system("rm '%s' '%s'" % (self.img_files[i], self.label_files[i]))  # remove
 
             if rank in [-1, 0]:
                 pbar.desc = 'Scanning labels %s (%g found, %g missing, %g empty, %g duplicate, for %g images)' % (

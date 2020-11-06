@@ -1,6 +1,5 @@
 import cv2
 
-
 def stream_result(img, scale, mode='video', window_name='result'):
     """
     img (numpy.ndarray)

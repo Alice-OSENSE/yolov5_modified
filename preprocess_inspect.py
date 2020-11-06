@@ -4,6 +4,9 @@ import numpy as np
 from pathlib import Path
 from skimage.transform import match_histograms
 
+from utils.partition_utils import Segmenter
+
+
 def get_foreground_mask(img, background, dilation_kernel, threshold=20):
     difference = np.abs(img.astype(np.int32) - background.astype(np.int32)).astype(np.uint8)
     blurred = cv2.GaussianBlur(difference, ksize=(5, 5), sigmaX=3, sigmaY=3)
@@ -11,7 +14,8 @@ def get_foreground_mask(img, background, dilation_kernel, threshold=20):
     mask = cv2.dilate(mask, kernel=dilation_kernel)
     return mask
 
-if __name__ == '__main__':
+
+def inspect_foreground_extraction():
     parser = argparse.ArgumentParser()
     parser.add_argument('--fg_path', type=str, help='foreground path')
     parser.add_argument('--bg_path', type=str, help='background path')
@@ -35,3 +39,20 @@ if __name__ == '__main__':
     cv2.imshow("matching result", masked_fg)
     cv2.waitKey(0)
     cv2.imwrite(opt.save_path, mask)
+
+
+def inspect_segmenter():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_path', type=str, help='Path to config files for segmenter')
+    parser.add_argument('--img_path', type=str, help='Path to the image')
+    opt = parser.parse_args()
+
+    img = cv2.imread(opt.img_path)
+    segmenter = Segmenter(config_path=opt.config_path)
+    sub_images = segmenter(img)
+    for img in sub_images:
+        cv2.imshow("img", img)
+        cv2.waitKey(0)
+
+if __name__ == '__main__':
+    inspect_segmenter()

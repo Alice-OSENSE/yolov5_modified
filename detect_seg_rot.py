@@ -1,7 +1,6 @@
 import argparse
 import os
 import numpy as np
-import shutil
 import time
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
+from pathlib import Path
 import pickle
 
 from models.experimental import attempt_load
@@ -20,30 +20,14 @@ from utils.general import (
 from utils.density_map_utils import (
     plot_one_density_distribution, setup_density_map
 )
+from utils.output_utils import get_new_video_writer
 from utils.stream_utils import stream_result
 from utils.preprocess_utils import get_foreground_mask
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 vid_path = None
 vid_writer = None
-
-
-def save_image(img, rotate, save_path=None):
-    img = np.rot90(img, k=rotate)
-    cv2.imwrite(save_path, img)
-
-# called if save_path is not vid_path
-def get_new_video_writer(save_path, vid_writer=None, vid_cap=None):
-    if isinstance(vid_writer, cv2.VideoWriter):
-        vid_writer.release()  # release previous video writer
-
-    fourcc = 'mp4v'  # output video codec
-    fps = vid_cap.get(cv2.CAP_PROP_FPS)
-
-    w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    return cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
-
+INV_255 = 1. / 255.
 
 def detect(write_label=False):
     # basic options
@@ -58,6 +42,9 @@ def detect(write_label=False):
     save_txt, save_bbox, save_dmap, save_pickle, save_frame = \
         opt.save_txt, opt.save_bbox, opt.save_dmap, opt.save_pickle, opt.save_frame
 
+    # options to segment the input frame
+    seg_config = opt.seg_config
+
     webcam = None
     if source_type == 'webcam':
         webcam = source.isnumeric() or source.startswith(('rtsp://', 'rtmp://', 'http://')) or source.endswith('.txt')
@@ -65,9 +52,9 @@ def detect(write_label=False):
     # Initialize
     set_logging()
     device = select_device(opt.device)
-    if os.path.exists(out):
-        shutil.rmtree(out)  # delete output folder
-    os.makedirs(out)  # make new output folder
+    # TODO: replace with Path as in pathlib
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
     half = device.type != 'cpu'  # half precision only supported on CUDA
 
     # Load model
@@ -87,13 +74,13 @@ def detect(write_label=False):
     vid_path, vid_writer, dmap_vid_writer = None, None, None
     if webcam:
         cudnn.benchmark = True  # set True to speed up constant image size inference
-        dataset = LoadStreams(source, img_size=imgsz)
+        dataset = LoadStreams(source, seg_config, img_size=imgsz)
     elif source_type == 'images':
         save_img = True
-        dataset = LoadImages(source, img_size=imgsz, rotate=opt.rotate)
+        dataset = LoadImages(source, seg_config, img_size=imgsz)
     else:
         cudnn.benchmark = True  # set True to speed up constant image size inference
-        dataset = LoadVideo(source, img_size=imgsz, rotate=opt.rotate)
+        dataset = LoadVideo(source, seg_config, img_size=imgsz)
         vid_path = opt.source
 
     # Get names and colors
@@ -109,14 +96,21 @@ def detect(write_label=False):
 
     frame_count = 0
 
-    for path, img, im0s, vid_cap in dataset:
+    for path, imgs, im0s, vid_cap in dataset:
         frame_count += 1
-
-        im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
-        img_rotate = np.rot90(img, k=opt.rotate, axes=(1, 2)).copy()
-        img_rotate = torch.from_numpy(img_rotate).to(device)
-        img_rotate = img_rotate.half() if half else img_rotate.float()  # uint8 to fp16/32
-        img_rotate /= 255.0  # 0 - 255 to 0.0 - 1.0
+        print("length of subimages %d" % len(imgs))
+        """
+        for img in imgs:
+            img = cv2.resize(img, None, fx=0.2, fy=0.2)
+            cv2.imshow("test", img)
+            cv2.waitKey(0)
+        """
+        imgs = [torch.from_numpy(img).to(device) for img in imgs]
+        imgs = [img.half() if half else img.float() for img in imgs]  # uint8 to fp16/32
+        imgs = [img * INV_255 for img in imgs]  # 0 - 255 to 0.0 - 1.0
+        return
+        for img in imgs:
+            pass
 
         if img_rotate.ndimension() == 3:
             img_rotate = img_rotate.unsqueeze(0)
@@ -248,7 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--output', type=str, default='inference/output', help='output folder')  # output folder
 
-    parser.add_argument('--segment', type=str, default='data/segment/segment_trivial', help='Segmentation parameter path; if None, \
+    parser.add_argument('--seg_config', type=str, default='data/segment/segment_trivial', help='Segmentation parameter path; if None, \
                             then no segmentation will be performed')
     parser.add_argument('--img-size', type=int, default=1280, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
