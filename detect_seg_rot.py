@@ -97,6 +97,7 @@ def detect(write_label=False):
     frame_count = 0
 
     for path, imgs, im0s, vid_cap in dataset:
+        # Here, im0s is the original image loaded using OpenCV
         frame_count += 1
         print("length of subimages %d" % len(imgs))
         """
@@ -108,36 +109,35 @@ def detect(write_label=False):
         imgs = [torch.from_numpy(img).to(device) for img in imgs]
         imgs = [img.half() if half else img.float() for img in imgs]  # uint8 to fp16/32
         imgs = [img * INV_255 for img in imgs]  # 0 - 255 to 0.0 - 1.0
-        return
+
         for img in imgs:
-            pass
+            if img.ndimension() == 3:
+                img = img.unsqueeze(0)
 
-        if img_rotate.ndimension() == 3:
-            img_rotate = img_rotate.unsqueeze(0)
+            if save_dmap or view_dmap:
+                dmap_rotate, pos_rotate = setup_density_map(img)
+                dmap_vid_path, dmap_vid_writer = None, None
 
-        if save_dmap or view_dmap:
-            dmap_rotate, pos_rotate = setup_density_map(im0s_rotate)
-            dmap_vid_path, dmap_vid_writer = None, None
+            # Inference
+            t1 = time_synchronized()
+            pred = model(img, augment=opt.augment)[0]
 
-        # Inference
-        t1 = time_synchronized()
-        pred = model(img_rotate, augment=opt.augment)[0]
+            # Apply NMS
+            pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes,
+                                       agnostic=opt.agnostic_nms)
+            t2 = time_synchronized()
 
-        # Apply NMS
-        pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
-        t2 = time_synchronized()
+            # Apply Classifier
+            if classify:
+                pred = apply_classifier(pred, modelc, img, im0s_rotate)
 
-        # Apply Classifier
-        if classify:
-            pred = apply_classifier(pred, modelc, img_rotate, im0s_rotate)
+            file_name = Path(path).name
+            if save_pickle:
+                pickle_dict[file_name] = []
 
-        file_name = Path(path).name
-        if save_pickle:
-            pickle_dict[file_name] = []
-
-        if save_frame:  # save raw frame
-            frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
-            cv2.imwrite(frame_path, im0s)
+            if save_frame:  # save raw frame
+                frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
+                cv2.imwrite(frame_path, im0s)
 
         # Process detections
         for i, detection in enumerate(pred):  # detections per image
