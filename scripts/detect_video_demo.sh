@@ -2,8 +2,8 @@ python3 ../detect_demo_mask.py \
 --weights /home/osense-office/Documents/ext_repo/yolov5/runs/exp23/weights/best.pt \
 --source_type video \
 --img-size 3000 \
---source /home/osense-office/Desktop/camera/213/ffmpeg_213_2020-10-15_15-10-00.mp4 \
---output /home/osense-office/Desktop/test \
+--source /home/osense-office/Desktop/fisheye/217/ffmpeg_217_2020-10-15_15-40-00.mp4 \
+--output /home/osense-office/Desktop/fisheye/217/test \
 --device 0 \
 --classes 0 \
 --conf-thres 0.5 \
@@ -13,7 +13,7 @@ python3 ../detect_demo_mask.py \
 --rotate 0 \
 --view-bbox \
 --save-bbox \
---background '/home/osense-office/Desktop/camera/213/background_late.jpg' \
+--background '/home/osense-office/Desktop/fisheye/217/background_late.jpg' \
 --bg_blur 13 \
 --bg_thres 30 \
---bg_dilation 40
+--bg_dilation 20

@@ -132,10 +132,17 @@ def detect(write_label=False):
             mask = np.expand_dims(np.amin(mask, axis=2), axis=2)
             mask_resized = letterbox(mask, new_shape=imgsz)[0]
             print(mask_resized.shape)
+
+
+            mask_resized = np.invert(mask_resized)
+            # cv2.imshow("imversed mask", np.expand_dims(mask_resized, axis=2))
+            # cv2.waitKey(0)
             # return
             mask_resized = np.expand_dims(mask_resized, axis=0)
             mask_resized = np.repeat(mask_resized, 3, 0)
-            img_rotate = cv2.bitwise_and(img_rotate, img_rotate, mask=mask_resized)
+            img_rotate = np.maximum(img_rotate, mask_resized)
+            # cv2.imshow("imversed mask", img_rotate.transpose(1, 2, 0))
+            # cv2.waitKey(0)
 
         # convert to tensor
         img_rotate = torch.from_numpy(img_rotate).to(device)
@@ -259,7 +266,7 @@ def detect(write_label=False):
                     dmap_vid_writer.write(dmap_rotate)
 
 
-    if save_txt or save_img:
+    if save_txt or save_bbox or save_dmap:
         print('results saved to %s' % Path(out))
 
     if save_pickle:
