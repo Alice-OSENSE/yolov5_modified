@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 import cv2
-import matplotlib.pyplot as plt
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
@@ -32,8 +31,9 @@ def save_image(img, rotate, save_path=None):
     img = np.rot90(img, k=rotate)
     cv2.imwrite(save_path, img)
 
+
 # called if save_path is not vid_path
-def get_new_video_writer(save_path, vid_writer=None, vid_cap=None):
+def get_new_video_writer(save_path, vid_writer=None, vid_cap=None, rotate=False):
     if isinstance(vid_writer, cv2.VideoWriter):
         vid_writer.release()  # release previous video writer
 
@@ -42,6 +42,8 @@ def get_new_video_writer(save_path, vid_writer=None, vid_cap=None):
 
     w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if rotate:
+        w, h = h, w
     return cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
 
 
@@ -113,17 +115,29 @@ def detect(write_label=False):
     background = None
     try:
         background = cv2.imread(opt.background)
-        background = letterbox(background, new_shape=imgsz)[0]
+        # background = letterbox(background, new_shape=imgsz)[0]
         background = np.rot90(background, k=opt.rotate, axes=(0, 1)).copy()
-        dilation_kernel = np.ones((15, 15))
+        dilation_kernel = np.ones((opt.bg_dilation, opt.bg_dilation))
     except FileNotFoundError:
         pass
 
     for path, img, im0s, vid_cap in dataset:
         frame_count += 1
-
         im0s_rotate = np.rot90(im0s, k=opt.rotate, axes=(0, 1)).copy()
         img_rotate = np.rot90(img, k=opt.rotate, axes=(1, 2)).copy()
+
+        # Subtract background
+        if background is not None:
+            mask = get_foreground_mask(im0s_rotate, background, blur_size=opt.bg_blur, dilation_kernel=dilation_kernel, threshold=opt.bg_thres)
+            mask = np.expand_dims(np.amin(mask, axis=2), axis=2)
+            mask_resized = letterbox(mask, new_shape=imgsz)[0]
+            print(mask_resized.shape)
+            # return
+            mask_resized = np.expand_dims(mask_resized, axis=0)
+            mask_resized = np.repeat(mask_resized, 3, 0)
+            img_rotate = cv2.bitwise_and(img_rotate, img_rotate, mask=mask_resized)
+
+        # convert to tensor
         img_rotate = torch.from_numpy(img_rotate).to(device)
         img_rotate = img_rotate.half() if half else img_rotate.float()  # uint8 to fp16/32
         img_rotate /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -135,13 +149,10 @@ def detect(write_label=False):
             dmap_rotate, pos_rotate = setup_density_map(im0s_rotate)
             dmap_vid_path, dmap_vid_writer = None, None
 
-        # Subtract background
-        if background:
-            mask = get_foreground_mask(img_rotate, background, dilation_kernel=dilation_kernel, threshold=40)
 
-        # Inference
+        #  Inference
         t1 = time_synchronized()
-        pred = model(cv2.bitwise_and(img_rotate, img_rotate, mask=mask), augment=opt.augment)[0]
+        pred = model(img_rotate, augment=opt.augment)[0]
 
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
@@ -197,7 +208,7 @@ def detect(write_label=False):
                             f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
                     if save_pickle:
-                        xywhc = xywh_unrotate.numpy().tolist() #TODO: there are still negative x!?? what the heck
+                        xywhc = xywh_unrotate.numpy().tolist()
                         xywhc.append(conf.data.cpu().item())
                         pickle_dict[file_name].append(xywhc)
 
@@ -222,6 +233,10 @@ def detect(write_label=False):
                     # plt.imshow(dmap_rotate)
                     # plt.show()
                     im0[:, :, 2] = dmap_rotate[:, :, 0]
+
+                # mask = np.expand_dims(mask[0, :, :], axis=2)
+                if background is not None:
+                    im0[:, :, 1] = cv2.bitwise_and(im0[:, :, 1], im0[:, :, 1], mask=mask)
                 stream_result(im0, scale=opt.stream_scale, mode=dataset.mode, window_name=p)
 
             # Save results (image with detections). We always rotate the image back to its original orientation
@@ -231,7 +246,7 @@ def detect(write_label=False):
                 else:
                     if vid_path != save_path:
                         vid_path = save_path
-                        vid_writer = get_new_video_writer(save_path, vid_writer, vid_cap) # new video
+                        vid_writer = get_new_video_writer(save_path, vid_writer, vid_cap)  # new video
                     vid_writer.write(im0)
 
             if save_dmap:
@@ -240,7 +255,7 @@ def detect(write_label=False):
                     cv2.imwrite(dmap_save_path, dmap_rotate)
                 else:
                     if dmap_vid_path != dmap_save_path:
-                        dmap_vid_writer = get_new_video_writer(dmap_save_path, dmap_vid_writer, vid_cap)  # new video
+                        dmap_vid_writer = get_new_video_writer(dmap_save_path, dmap_vid_writer, vid_cap, rotate=opt.rotate % 2)  # new video
                     dmap_vid_writer.write(dmap_rotate)
 
 
@@ -257,6 +272,7 @@ def detect(write_label=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--source_type', type=str, default='image', help='the type of source [video | webcam | image]')
 
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
@@ -268,7 +284,9 @@ if __name__ == '__main__':
     parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--background', type=str, default=None, help='The path to the mask image that masked out most of the background')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--bg_blur', type=int, default=7, help='The value for the gaussian blur kernel of the background mask')
+    parser.add_argument('--bg_thres', type=int, default=40, help='The threshold value for creating the background mask')
+    parser.add_argument('--bg_dilation', type=int, default=20, help='The value for the dilation kernel of the background mask')
 
     # options to stream the results
     parser.add_argument('--view-bbox', action='store_true', help='display detection results with drawn bounding box')

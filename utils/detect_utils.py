@@ -1,5 +1,7 @@
 import numpy as np
 
+
+# This is too god darn slow...
 def prepare_for_density_map(img):
     dmap = np.zeros([img.shape[0], img.shape[1], 1])
     x_axis = np.linspace(0, img.shape[0], img.shape[0])

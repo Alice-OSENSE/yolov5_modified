@@ -1,4 +1,4 @@
-python3 ../detect.py \
+python3 ../detect_demo_mask.py \
 --weights /home/osense-office/Documents/ext_repo/yolov5/runs/exp23/weights/best.pt \
 --source_type video \
 --img-size 3000 \
@@ -6,11 +6,14 @@ python3 ../detect.py \
 --output /home/osense-office/Desktop/test \
 --device 0 \
 --classes 0 \
---conf-thres 0.45 \
---iou-thres 0.4 \
+--conf-thres 0.5 \
+--iou-thres 0.5 \
 --delay 20 \
 --stream_scale 0.4 \
 --rotate 0 \
 --view-bbox \
 --save-bbox \
---background '/home/osense-office/Desktop/camera/213/background_late.jpg'
+--background '/home/osense-office/Desktop/camera/213/background_late.jpg' \
+--bg_blur 13 \
+--bg_thres 30 \
+--bg_dilation 40
