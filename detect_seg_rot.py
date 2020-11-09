@@ -96,7 +96,20 @@ def detect(write_label=False):
 
     frame_count = 0
 
-    for path, imgs, im0s, vid_cap in dataset:
+    segmenter = dataset.segmenter  # we need segmenter to retrieve the data...
+    for path, imgs, im0s, im0, vid_cap in dataset:
+        """
+        Reminder:
+        video_path (str)
+        imgs (segmented and padded images)
+        img0s (segmented)
+        img0 (the original image)
+        cap ()
+        """
+        if save_frame:  # save raw frame
+            frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
+            cv2.imwrite(frame_path, im0)
+
         # Here, im0s is the original image loaded using OpenCV
         frame_count += 1
         print("length of subimages %d" % len(imgs))
@@ -106,11 +119,15 @@ def detect(write_label=False):
             cv2.imshow("test", img)
             cv2.waitKey(0)
         """
+
         imgs = [torch.from_numpy(img).to(device) for img in imgs]
         imgs = [img.half() if half else img.float() for img in imgs]  # uint8 to fp16/32
         imgs = [img * INV_255 for img in imgs]  # 0 - 255 to 0.0 - 1.0
 
-        for img in imgs:
+        for subimg_index, img_tuple in enumerate(zip(imgs, im0s)):
+            img = img_tuple[0]
+            pre_img = img_tuple[1]
+
             if img.ndimension() == 3:
                 img = img.unsqueeze(0)
 
@@ -128,68 +145,73 @@ def detect(write_label=False):
             t2 = time_synchronized()
 
             # Apply Classifier
-            if classify:
-                pred = apply_classifier(pred, modelc, img, im0s_rotate)
+            if classify:  # this is false anyways
+                pass
+                # pred = apply_classifier(pred, modelc, img, im0s_rotate)
 
             file_name = Path(path).name
             if save_pickle:
                 pickle_dict[file_name] = []
 
-            if save_frame:  # save raw frame
-                frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
-                cv2.imwrite(frame_path, im0s)
+                # Process detections
+                for i, detection in enumerate(pred):  # detections per image
+                    if webcam:  # batch_size >= 1
+                        p, s, orig_img = path[i], '%g: ' % i, pre_img[i]
+                    else:
+                        p, s, orig_img = path, '', pre_img
 
-        # Process detections
-        for i, detection in enumerate(pred):  # detections per image
-            if webcam:  # batch_size >= 1
-                p, s, im0 = path[i], '%g: ' % i, im0s_rotate[i]
-                orig_im0 = np.rot90(im0s_rotate[i], k=-opt.rotate, axes=(0, 1)).copy()
-            else:
-                p, s, im0 = path, '', im0s_rotate
-                orig_im0 = np.rot90(im0s_rotate, k=-opt.rotate, axes=(0, 1)).copy()
+                    if save_dmap:
+                        # variables for density map
+                        dmap_file_name = f'dmap_{Path(p).name}'
+                        dmap_save_path = str(Path(out) / dmap_file_name)  # change the name
+                        dmap_vid_path = None
 
-            # variables for density map
-            dmap_file_name = f'dmap_{Path(p).name}'
-            dmap_save_path = str(Path(out) / dmap_file_name)  # change the name
-            dmap_vid_path = None
-            save_path = str(Path(out) / Path(p).name)
+                    save_path = str(Path(out) / Path(p).name)
 
-            txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'image' else '')
-            s += '%gx%g ' % img_rotate.shape[2:]  # print string
-            gn = torch.tensor(im0s_rotate.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-            if detection is not None and len(detection):
-                # Rescale boxes from img_size to im0 size
-                detection[:, :4] = scale_coords(img_rotate.shape[2:], detection[:, :4], im0.shape).round()
+                    txt_path = str(Path(out) / Path(p).stem) + (
+                        '_%g' % dataset.frame if dataset.mode == 'image' else '')
+                    s += '%gx%g ' % im0.shape[2:]  # print string
 
-                # Print results
-                for c in detection[:, -1].unique():
-                    n = (detection[:, -1] == c).sum()  # detections per class
-                    s += '%g %ss, ' % (n, names[int(c)])  # add to string
+                    #m....
+                    gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
 
-                # Write results
-                for *xyxy, conf, cls in reversed(detection):
-                    xyxy_unrotate = rotate_bbox(im0.shape, torch.tensor(xyxy).view(1, 4), k=-opt.rotate).squeeze(0)
-                    xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
+                    if detection is not None and len(detection):
+                        # Rescale boxes from img_size to im0 size
+                        detection[:, :4] = scale_coords(img.shape[2:], detection[:, :4], orig_img.shape).round()
 
-                    if save_txt:  # Write to file
-                        xywh = (xywh_unrotate / gn).view(-1).tolist()  # normalized xywh
-                        with open(txt_path + '.txt', 'a') as f:
-                            f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
+                        # Print results
+                        for c in detection[:, -1].unique():
+                            n = (detection[:, -1] == c).sum()  # detections per class
+                            s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
-                    if save_pickle:
-                        xywhc = xywh_unrotate.numpy().tolist() #TODO: there are still negative x!?? what the heck
-                        xywhc.append(conf.data.cpu().item())
-                        pickle_dict[file_name].append(xywhc)
+                        # Write results
+                        for *xyxy, conf, cls in reversed(detection):
+                            # d offset to xyxy_unrotate
+                            xyxy_unrotate = rotate_bbox(img.shape, torch.tensor(xyxy).view(1, 4),
+                                                        k=-opt.rotate).squeeze(0)
+                            # Add offset to xywf_unrotate
+                            xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
 
-                    if save_bbox or view_bbox:  # Add bbox to image
-                        label = '%s %.2f' % (names[int(cls)], conf)
-                        plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)],
-                                     line_thickness=1)
-                        plot_one_box(xyxy_unrotate, orig_im0, label=label, write_label=write_label, color=colors[int(cls)],
-                                     line_thickness=1)
+                            if save_txt:  # Write to file #
+                                xywh = (xywh_unrotate / gn).view(-1).tolist()  # normalized xywh
+                                with open(txt_path + '.txt', 'a') as f:
+                                    f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
-                    if save_dmap or view_dmap:
-                        dmap_rotate = plot_one_density_distribution(xyxy, pos_rotate, dmap_rotate)
+                            if save_pickle:  # TODO: need to calculate the offset
+                                xywhc = xywh_unrotate.numpy().tolist()
+                                xywhc.append(conf.data.cpu().item())
+                                pickle_dict[file_name].append(xywhc)
+
+                            if save_bbox or view_bbox:  # Add bbox to image
+                                label = '%s %.2f' % (names[int(cls)], conf)
+                                plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)],
+                                             line_thickness=1)
+                                plot_one_box(xyxy_unrotate, im0, label=label, write_label=write_label,
+                                             color=colors[int(cls)],
+                                             line_thickness=1)
+
+                            if save_dmap or view_dmap:
+                                dmap_rotate = plot_one_density_distribution(xyxy, pos_rotate, dmap_rotate)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
@@ -207,7 +229,7 @@ def detect(write_label=False):
             # Save results (image with detections). We always rotate the image back to its original orientation
             if save_bbox or save_dmap:
                 if dataset.mode == 'images':
-                    cv2.imwrite(save_path, orig_im0)
+                    cv2.imwrite(save_path, im0)
                 else:
                     if vid_path != save_path:
                         vid_path = save_path

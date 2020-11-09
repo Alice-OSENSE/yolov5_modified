@@ -19,7 +19,18 @@ class Segmenter:
             return [img]
         segments = [self._slice(img=img, index=i, channel_last=channel_last) for i in range(self.n_segments)]
         segments = [np.rot90(subimg, k=k).copy() for subimg, k in zip(segments, self.segment_dict['rot90'])]
+
         return segments
+
+    def get_offset(self, img, subimg_index):
+        # TODO: also return the offset of the subimage's upper left corner w.r.t. the original image
+        """
+        y = axis 0 (horizontal)
+        x = axis 1 (vertical)
+        """
+        subimg = self.segment_dict['subimages'][subimg_index]
+        offset = [int(subimg[0] * img.shape[1]), int(subimg[1] * img.shape[0])]
+        return offset
 
     def get_subimage_wh(self, img_shape, subimg_index, channel_last=True):
         xyxy = self.get_subimage_xyxy(img_shape, subimg_index, channel_last=channel_last)

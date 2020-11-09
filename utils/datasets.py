@@ -279,6 +279,15 @@ class LoadVideo(LoadDataset):  # for inference
         return self
 
     def __next__(self):
+        """
+        Return Value
+        video_path (str)
+        imgs (segmented and padded images)
+        img0s (segmented)
+        img0 (the original image)
+        offsets (The offset of unrotated imgs )
+        self.cap ()
+        """
         self.count += 1
         if cv2.waitKey(1) == ord('q'):  # q to quit
             self.cap.release()
@@ -293,21 +302,23 @@ class LoadVideo(LoadDataset):  # for inference
                 if ret_val:
                     break
 
+        img0s = img0
         if self.segmenter is not None:
-            imgs = self.segmenter(img0)
+            img0s = self.segmenter(img0)
 
-        imgs = [letterbox(img, new_shape=self.img_size)[0] for img in imgs]
-        # Convert .transpose(2, 0, 1)
+        # the new shape has to be adjusted...
+        imgs = [letterbox(img, new_shape=self.img_size)[0] for img in img0s]
         imgs = [img[:, :, ::-1] for img in imgs]  # BGR to RGB, to 3x416x416
         imgs = [np.ascontiguousarray(img) for img in imgs]
+        # offsets = self.segmenter.get_offsets(img0) if self.segmenter else None
 
-        return self.video_path, imgs, img0, self.cap
+        return self.video_path, imgs, img0s, img0, self.cap
 
     def __len__(self):
         return 0
 
     def get_padded_size(self):
-        _, img, _, _ = self.__next__()
+        _, img, _, _, _ = self.__next__()
         return img.shape
 
 
