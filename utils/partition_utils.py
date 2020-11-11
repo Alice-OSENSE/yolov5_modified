@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import yaml
 from utils.general import rotate_bbox
@@ -23,13 +24,12 @@ class Segmenter:
         return segments
 
     def get_offset(self, img, subimg_index):
-        # TODO: also return the offset of the subimage's upper left corner w.r.t. the original image
         """
-        y = axis 0 (horizontal)
-        x = axis 1 (vertical)
+        y = axis 0 (vertical)
+        x = axis 1 (horizontal)
         """
         subimg = self.segment_dict['subimages'][subimg_index]
-        offset = [int(subimg[0] * img.shape[1]), int(subimg[1] * img.shape[0])]
+        offset = [int(subimg[0] * img.shape[0]), int(subimg[1] * img.shape[1])]
         return offset
 
     def get_subimage_wh(self, img_shape, subimg_index, channel_last=True):
@@ -65,3 +65,15 @@ class Segmenter:
 
     def put_in_place(self, subimg_index, subimg_size, xyxy):
         return rotate_bbox(subimg_size, xyxy, k=-self.segment_dict['rot90'][subimg_index])
+
+
+if __name__ == '__main__':
+    path = '/home/osense-office/Documents/ext_repo/yolov5/data/segment/horizontal_split.yaml'
+    segmenter = Segmenter(path)
+
+    # input image is still in Opencv format... channel comes last !!!
+    dummy_img = np.zeros((200, 250, 3))
+    cv2.imshow("see x and y", dummy_img)
+    cv2.waitKey(0)
+    print(segmenter.get_offset(dummy_img, 0))
+    print(segmenter.get_offset(dummy_img, 1))

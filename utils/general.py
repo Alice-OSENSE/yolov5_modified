@@ -1298,7 +1298,7 @@ def plot_results(start=0, stop=0, bucket='', id=(), labels=(), save_dir=''):
     fig.savefig(Path(save_dir) / 'results.png', dpi=200)
 
 
-def rotate_bbox(rotated_img_wh, xyxy, k=0):
+def rotate_bbox(y_dim, x_dim, xyxy, k=0):
     """
     original_img_wh
     xyxy (an array of four float numbers)
@@ -1309,18 +1309,17 @@ def rotate_bbox(rotated_img_wh, xyxy, k=0):
     xywh = xyxy2xywh(xyxy)[0]
     # print("xywh here")
     print(xywh)
-    img_w, img_h, _ = rotated_img_wh
 
     new_xywh = {
         0: xywh,
-        1: [xywh[1], img_w - xywh[0], xywh[3], xywh[2]],
-        2: [img_w - xywh[0], img_h - xywh[1], xywh[2], xywh[3]],
-        3: [img_h - xywh[1], xywh[0], xywh[3], xywh[2]]
+        1: [xywh[1], y_dim - xywh[0], xywh[3], xywh[2]],
+        2: [y_dim - xywh[0], x_dim - xywh[1], xywh[2], xywh[3]],
+        3: [x_dim - xywh[1], xywh[0], xywh[3], xywh[2]]
     }
     new_xywh2 = {
         0: xywh,
-        1: [xywh[1], img_h - xywh[0], xywh[3], xywh[2]],
-        2: [img_h - xywh[0], img_w - xywh[1], xywh[2], xywh[3]],
-        3: [img_w - xywh[1], xywh[0], xywh[3], xywh[2]]
+        1: [xywh[1], x_dim - xywh[0], xywh[3], xywh[2]],
+        2: [x_dim - xywh[0], y_dim - xywh[1], xywh[2], xywh[3]],
+        3: [y_dim - xywh[1], xywh[0], xywh[3], xywh[2]]
     }
     return xywh2xyxy(torch.tensor(new_xywh2[k % 4]).view(1, 4))

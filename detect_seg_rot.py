@@ -112,7 +112,6 @@ def detect(write_label=False):
 
         # Here, im0s is the original image loaded using OpenCV
         frame_count += 1
-        print("length of subimages %d" % len(imgs))
         """
         for img in imgs:
             img = cv2.resize(img, None, fx=0.2, fy=0.2)
@@ -125,19 +124,22 @@ def detect(write_label=False):
         imgs = [img * INV_255 for img in imgs]  # 0 - 255 to 0.0 - 1.0
 
         for subimg_index, img_tuple in enumerate(zip(imgs, im0s)):
-            img = img_tuple[0]
-            pre_img = img_tuple[1]
+            if subimg_index != 1:
+                continue
 
-            if img.ndimension() == 3:
-                img = img.unsqueeze(0)
+            seg_and_pad_img = img_tuple[0]  # in tensor format, shape = [1, 3, w, h]
+            seg_img = img_tuple[1]
+
+            if seg_and_pad_img.ndimension() == 3:
+                seg_and_pad_img = seg_and_pad_img.unsqueeze(0)
 
             if save_dmap or view_dmap:
-                dmap_rotate, pos_rotate = setup_density_map(img)
+                dmap_rotate, pos_rotate = setup_density_map(seg_and_pad_img)
                 dmap_vid_path, dmap_vid_writer = None, None
 
             # Inference
             t1 = time_synchronized()
-            pred = model(img, augment=opt.augment)[0]
+            pred = model(seg_and_pad_img, augment=opt.augment)[0]
 
             # Apply NMS
             pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes,
@@ -153,97 +155,100 @@ def detect(write_label=False):
             if save_pickle:
                 pickle_dict[file_name] = []
 
-                # Process detections
-                for i, detection in enumerate(pred):  # detections per image
-                    if webcam:  # batch_size >= 1
-                        p, s, orig_img = path[i], '%g: ' % i, pre_img[i]
-                    else:
-                        p, s, orig_img = path, '', pre_img
+            # get the offset for this sub-image (before rotation)
+            offset = segmenter.get_offset(im0, subimg_index)
+            print("check offset")
+            print(im0.shape)
+            print(offset)
+            # Process detections
+            for i, detection in enumerate(pred):  # detections per image
+                if webcam:  # batch_size >= 1
+                    p, s, orig_img = path[i], '%g: ' % i, seg_img[i]
+                else:
+                    p, s, orig_img = path, '', seg_img
 
-                    if save_dmap:
-                        # variables for density map
-                        dmap_file_name = f'dmap_{Path(p).name}'
-                        dmap_save_path = str(Path(out) / dmap_file_name)  # change the name
-                        dmap_vid_path = None
+                if save_dmap:
+                    # variables for density map
+                    dmap_file_name = f'dmap_{Path(p).name}.jpg'
+                    dmap_save_path = str(Path(out) / dmap_file_name)  # change the name
 
-                    save_path = str(Path(out) / Path(p).name)
+                save_path = str(Path(out) / Path(p).name)
+                txt_path = str(Path(out) / Path(p).stem) + ('_%g' % dataset.frame if dataset.mode == 'image' else '')
+                s += '%gx%g ' % seg_and_pad_img.shape[2:]  # print string
 
-                    txt_path = str(Path(out) / Path(p).stem) + (
-                        '_%g' % dataset.frame if dataset.mode == 'image' else '')
-                    s += '%gx%g ' % im0.shape[2:]  # print string
+                # m....
+                gn = torch.tensor(orig_img.shape)[[1, 0, 1, 0]]  # normalization gain whwh
 
-                    #m....
-                    gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+                if detection is not None and len(detection):
+                    # Rescale boxes from img_size to im0 size
+                    detection[:, :4] = scale_coords(seg_and_pad_img.shape[2:], detection[:, :4], orig_img.shape).round()
 
-                    if detection is not None and len(detection):
-                        # Rescale boxes from img_size to im0 size
-                        detection[:, :4] = scale_coords(img.shape[2:], detection[:, :4], orig_img.shape).round()
+                    # Print results
+                    for c in detection[:, -1].unique():
+                        n = (detection[:, -1] == c).sum()  # detections per class
+                        s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
-                        # Print results
-                        for c in detection[:, -1].unique():
-                            n = (detection[:, -1] == c).sum()  # detections per class
-                            s += '%g %ss, ' % (n, names[int(c)])  # add to string
+                    # Write results
+                    for *xyxy, conf, cls in reversed(detection):
+                        # seg_and_pad is now a (1, 3, h, w) 4-dim tensor ...
+                        xyxy_unrotate = rotate_bbox(seg_and_pad_img.shape[2], seg_and_pad_img.shape[3], torch.tensor(xyxy).view(1, 4), k=-segmenter.segment_dict['rot90'][subimg_index]).squeeze(0)
 
-                        # Write results
-                        for *xyxy, conf, cls in reversed(detection):
-                            # d offset to xyxy_unrotate
-                            xyxy_unrotate = rotate_bbox(img.shape, torch.tensor(xyxy).view(1, 4),
-                                                        k=-opt.rotate).squeeze(0)
-                            # Add offset to xywf_unrotate
-                            xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
+                        # Add the offset of unrotated seg_image to im0 (the original image)
+                        xyxy_unrotate = [xyxy_unrotate[0] + offset[0], xyxy_unrotate[1] + offset[1],
+                                         xyxy_unrotate[2] + offset[0], xyxy_unrotate[3] + offset[1]]
 
-                            if save_txt:  # Write to file #
-                                xywh = (xywh_unrotate / gn).view(-1).tolist()  # normalized xywh
-                                with open(txt_path + '.txt', 'a') as f:
-                                    f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
+                        xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
 
-                            if save_pickle:  # TODO: need to calculate the offset
-                                xywhc = xywh_unrotate.numpy().tolist()
-                                xywhc.append(conf.data.cpu().item())
-                                pickle_dict[file_name].append(xywhc)
+                        if save_txt:  # Write to file #
+                            xywh = (xywh_unrotate / gn).view(-1).tolist()  # normalized xywh
+                            with open(txt_path + '.txt', 'a') as f:
+                                f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
-                            if save_bbox or view_bbox:  # Add bbox to image
-                                label = '%s %.2f' % (names[int(cls)], conf)
-                                plot_one_box(xyxy, im0, label=label, write_label=write_label, color=colors[int(cls)],
-                                             line_thickness=1)
-                                plot_one_box(xyxy_unrotate, im0, label=label, write_label=write_label,
+                        if save_pickle:
+                            xywhc = xywh_unrotate.numpy().tolist()
+                            xywhc.append(conf.data.cpu().item())
+                            pickle_dict[file_name].append(xywhc)
+
+                        if save_bbox or view_bbox:  # Add bbox to image
+                            label = '%s %.2f' % (names[int(cls)], conf)
+                            plot_one_box(xyxy_unrotate, im0, label=label, write_label=write_label,
                                              color=colors[int(cls)],
                                              line_thickness=1)
 
-                            if save_dmap or view_dmap:
-                                dmap_rotate = plot_one_density_distribution(xyxy, pos_rotate, dmap_rotate)
+                        if save_dmap or view_dmap:
+                            dmap_rotate = plot_one_density_distribution(xyxy, pos_rotate, dmap_rotate)
 
-            # Print time (inference + NMS)
-            print('%sDone. (%.3fs)' % (s, t2 - t1))
+        # Print time (inference + NMS)
+        print('%sDone. (%.3fs)' % (s, t2 - t1))
 
-            # Stream results
-            if view_bbox or view_dmap:
-                if view_dmap:
-                    dmap_rotate *= 255 * 40
-                    dmap_rotate[dmap_rotate > 255] = 255
-                    # plt.imshow(dmap_rotate)
-                    # plt.show()
-                    im0[:, :, 2] = dmap_rotate[:, :, 0]
-                stream_result(im0, scale=opt.stream_scale, mode=dataset.mode, window_name=p)
+        # Stream results
+        if view_bbox or view_dmap:
+            if view_dmap:
+                dmap_rotate *= 255 * 40
+                dmap_rotate[dmap_rotate > 255] = 255
+                # plt.imshow(dmap_rotate)
+                # plt.show()
+                im0[:, :, 2] = dmap_rotate[:, :, 0]
+            stream_result(im0, scale=opt.stream_scale, mode=dataset.mode, window_name=p)
 
-            # Save results (image with detections). We always rotate the image back to its original orientation
-            if save_bbox or save_dmap:
-                if dataset.mode == 'images':
-                    cv2.imwrite(save_path, im0)
-                else:
-                    if vid_path != save_path:
-                        vid_path = save_path
-                        vid_writer = get_new_video_writer(save_path, vid_writer, vid_cap) # new video
-                    vid_writer.write(im0)
+        # Save results (image with detections). We always rotate the image back to its original orientation
+        if save_bbox or save_dmap:
+            if dataset.mode == 'images':
+                cv2.imwrite(save_path, im0)
+            else:
+                if vid_path != save_path:
+                    vid_path = save_path
+                    vid_writer = get_new_video_writer(save_path, vid_writer, vid_cap)  # new video
+                vid_writer.write(im0)
 
-            if save_dmap:
-                dmap_rotate = np.rot90(dmap_rotate, k=-opt.rotate)
-                if dataset.mode == 'images':
-                    cv2.imwrite(dmap_save_path, dmap_rotate)
-                else:
-                    if dmap_vid_path != dmap_save_path:
-                        dmap_vid_writer = get_new_video_writer(dmap_save_path, dmap_vid_writer, vid_cap)  # new video
-                    dmap_vid_writer.write(dmap_rotate)
+        if save_dmap:
+            dmap_rotate = np.rot90(dmap_rotate, k=-opt.rotate)
+            if dataset.mode == 'images':
+                cv2.imwrite(dmap_save_path, dmap_rotate)
+            else:
+                if dmap_vid_path != dmap_save_path:
+                    dmap_vid_writer = get_new_video_writer(dmap_save_path, dmap_vid_writer, vid_cap)  # new video
+                dmap_vid_writer.write(dmap_rotate)
 
 
     if save_txt or save_img:

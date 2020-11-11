@@ -308,7 +308,7 @@ class LoadVideo(LoadDataset):  # for inference
 
         # the new shape has to be adjusted...
         imgs = [letterbox(img, new_shape=self.img_size)[0] for img in img0s]
-        imgs = [img[:, :, ::-1] for img in imgs]  # BGR to RGB, to 3x416x416
+        imgs = [img[:, :, ::-1].transpose(2, 0, 1) for img in imgs]  # BGR to RGB, to 3x416x416
         imgs = [np.ascontiguousarray(img) for img in imgs]
         # offsets = self.segmenter.get_offsets(img0) if self.segmenter else None
 
