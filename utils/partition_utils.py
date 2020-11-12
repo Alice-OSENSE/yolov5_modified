@@ -68,7 +68,7 @@ class Segmenter:
 
 
 if __name__ == '__main__':
-    path = '/home/osense-office/Documents/ext_repo/yolov5/data/segment/horizontal_split.yaml'
+    path = '/data/segment/camera_split.yaml'
     segmenter = Segmenter(path)
 
     # input image is still in Opencv format... channel comes last !!!

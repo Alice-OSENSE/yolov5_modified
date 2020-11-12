@@ -52,7 +52,6 @@ def detect(write_label=False):
     # Initialize
     set_logging()
     device = select_device(opt.device)
-    # TODO: replace with Path as in pathlib
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     half = device.type != 'cpu'  # half precision only supported on CUDA
@@ -106,11 +105,12 @@ def detect(write_label=False):
         img0 (the original image)
         cap ()
         """
+
+        # Here, im0 is the original image loaded using OpenCV
         if save_frame:  # save raw frame
             frame_path = str(Path(out) / file_name / f'{str(frame_count)}.jpg')
             cv2.imwrite(frame_path, im0)
 
-        # Here, im0s is the original image loaded using OpenCV
         frame_count += 1
         """
         for img in imgs:
@@ -124,8 +124,6 @@ def detect(write_label=False):
         imgs = [img * INV_255 for img in imgs]  # 0 - 255 to 0.0 - 1.0
 
         for subimg_index, img_tuple in enumerate(zip(imgs, im0s)):
-            if subimg_index != 1:
-                continue
 
             seg_and_pad_img = img_tuple[0]  # in tensor format, shape = [1, 3, w, h]
             seg_img = img_tuple[1]
@@ -157,9 +155,7 @@ def detect(write_label=False):
 
             # get the offset for this sub-image (before rotation)
             offset = segmenter.get_offset(im0, subimg_index)
-            print("check offset")
-            print(im0.shape)
-            print(offset)
+
             # Process detections
             for i, detection in enumerate(pred):  # detections per image
                 if webcam:  # batch_size >= 1
@@ -191,12 +187,14 @@ def detect(write_label=False):
                     # Write results
                     for *xyxy, conf, cls in reversed(detection):
                         # seg_and_pad is now a (1, 3, h, w) 4-dim tensor ...
-                        xyxy_unrotate = rotate_bbox(seg_and_pad_img.shape[2], seg_and_pad_img.shape[3], torch.tensor(xyxy).view(1, 4), k=-segmenter.segment_dict['rot90'][subimg_index]).squeeze(0)
-
+                        xyxy_unrotate = rotate_bbox(orig_img.shape[0], orig_img.shape[1], torch.tensor(xyxy).view(1, 4), k=-segmenter.segment_dict['rot90'][subimg_index]).squeeze(0)
+                        print("before offset")
+                        print(xyxy_unrotate)
                         # Add the offset of unrotated seg_image to im0 (the original image)
-                        xyxy_unrotate = [xyxy_unrotate[0] + offset[0], xyxy_unrotate[1] + offset[1],
-                                         xyxy_unrotate[2] + offset[0], xyxy_unrotate[3] + offset[1]]
-
+                        xyxy_unrotate = [xyxy_unrotate[0] + offset[1], xyxy_unrotate[1] + offset[0],
+                                         xyxy_unrotate[2] + offset[1], xyxy_unrotate[3] + offset[0]]
+                        print("after offset")
+                        print(xyxy_unrotate)
                         xywh_unrotate = xyxy2xywh(torch.tensor(xyxy_unrotate).view(1, 4))
 
                         if save_txt:  # Write to file #
@@ -211,6 +209,9 @@ def detect(write_label=False):
 
                         if save_bbox or view_bbox:  # Add bbox to image
                             label = '%s %.2f' % (names[int(cls)], conf)
+                            print("bbox")
+                            print(xyxy_unrotate)
+                            print(im0.shape)
                             plot_one_box(xyxy_unrotate, im0, label=label, write_label=write_label,
                                              color=colors[int(cls)],
                                              line_thickness=1)

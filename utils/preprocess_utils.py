@@ -4,8 +4,6 @@ from skimage.transform import match_histograms
 
 
 def get_foreground_mask(img, background, blur_size, dilation_kernel, threshold=20):
-    print(img.shape)
-    print(background.shape)
     # both img and background should have the same number of channels!
     difference = np.abs(img.astype(np.int32) - background.astype(np.int32)).astype(np.uint8)
 
